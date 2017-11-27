@@ -41,6 +41,8 @@
 #include <linux/types.h>
 #include <flashcache.h>
 
+#define STRING_LENGTH 127
+
 #undef COMMIT_REV
 
 void
@@ -195,9 +197,28 @@ int
 main(int argc, char **argv)
 {
 	int cache_fd, disk_fd, c;
-	char *disk_devname, *ssd_devname, *cachedev;
+
+	char disk_devnames[STRING_LENGTH];
+	memset(disk_devnames, '\0', sizeof(disk_devnames));
+	char *disk_devname;
+	int hdd_count = 0;
+
+	char ssd_devnames[STRING_LENGTH];
+	memset(ssd_devnames, '\0', sizeof(ssd_devnames));
+	char *ssd_devname;
+	int ssd_count = 0;
+
+	char *cachedev;
+
+	char *next;
+	int index;
+	int char_length;
+	char temp_char[STRING_LENGTH];
+	memset(temp_char, '\0', sizeof(temp_char));
+
 	struct flash_superblock *sb = (struct flash_superblock *)buf;
 	sector_t cache_devsize, disk_devsize;
+	sector_t total_cache_devsize = 0, total_disk_devsize = 0;
 	sector_t block_size = 0, md_block_size = 0, cache_size = 0;
 	sector_t ram_needed;
 	struct sysinfo i;
@@ -209,7 +230,7 @@ main(int argc, char **argv)
 	char *cache_mode_str;
 	
 	pname = argv[0];
-	while ((c = getopt(argc, argv, "fs:b:d:m:va:p:w")) != -1) {
+	while ((c = getopt(argc, argv, "fs:b:d:m:va:p:wn:c:h:")) != -1) {
 		switch (c) {
 		case 's':
 			cache_size = get_cache_size(optarg);
@@ -250,7 +271,52 @@ main(int argc, char **argv)
                         break;
 		case 'w':
 			write_cache_only = 1;
-                        break;			
+                        break;	
+
+        case 'n':
+        	cachedev = optarg;
+        	break;
+
+        case 'c':
+        	index = optind-1;
+        	char_length = 0;
+            while(index < argc){
+                next = strdup(argv[index]);
+                index++;
+                if(next[0] != '-'){         /* check if optarg is next switch */
+                	if(ssd_count != 0) {
+                		ssd_devnames[char_length++] = ' ';
+                	}
+                    strcpy(ssd_devnames + char_length, next);
+                    char_length += strlen(next);
+                    ssd_count++;
+                }
+                else {
+                	break;
+                }
+            }
+            break;
+
+        case 'h':
+        	index = optind-1;
+        	char_length = 0;
+            while(index < argc){
+                next = strdup(argv[index]);
+                index++;
+                if(next[0] != '-'){         /* check if optarg is next switch */
+                	if(hdd_count != 0) {
+                		disk_devnames[char_length++] = ' ';
+                	}
+                    strcpy(disk_devnames + char_length, next);
+                    char_length += strlen(next);
+                    hdd_count++;
+                }
+                else {
+                	break;
+                }
+            }
+            break;
+
 		case '?':
 			usage(pname);
 		}
@@ -263,80 +329,89 @@ main(int argc, char **argv)
 		block_size = 8;		/* 4KB default blocksize */
 	if (md_block_size == 0)
 		md_block_size = 8;	/* 4KB default blocksize */
-	cachedev = argv[optind++];
-	if (optind == argc)
-		usage(pname);
-	ssd_devname = argv[optind++];
-	if (optind == argc)
-		usage(pname);
-	disk_devname = argv[optind];
-	printf("cachedev %s, ssd_devname %s, disk_devname %s cache mode %s\n", 
-	       cachedev, ssd_devname, disk_devname, cache_mode_str);
+
+	printf("cachedev: %s, ssd_num: %d, ssd_devnames: %s, hdd_num: %d, disk_devnames: %s, cache mode: %s\n", 
+	       cachedev, ssd_count, ssd_devnames, hdd_count, disk_devnames, cache_mode_str);
+
 	if (cache_mode == FLASHCACHE_WRITE_BACK)
 		printf("block_size %lu, md_block_size %lu, cache_size %lu\n", 
 		       block_size, md_block_size, cache_size);
 	else
 		printf("block_size %lu, cache_size %lu\n", 
 		       block_size, cache_size);
-	cache_fd = open(ssd_devname, O_RDONLY);
-	if (cache_fd < 0) {
-		fprintf(stderr, "Failed to open %s\n", ssd_devname);
-		exit(1);
-	}
-        lseek(cache_fd, 0, SEEK_SET);
-	if (read(cache_fd, buf, 512) < 0) {
-		fprintf(stderr, "Cannot read Flashcache superblock %s\n", 
-			ssd_devname);
-		exit(1);		
-	}
-	if (sb->cache_sb_state == CACHE_MD_STATE_DIRTY ||
-	    sb->cache_sb_state == CACHE_MD_STATE_CLEAN ||
-	    sb->cache_sb_state == CACHE_MD_STATE_FASTCLEAN ||
-	    sb->cache_sb_state == CACHE_MD_STATE_UNSTABLE) {
-		fprintf(stderr, "%s: Valid Flashcache already exists on %s\n", 
-			pname, ssd_devname);
-		fprintf(stderr, "%s: Use flashcache_destroy first and then create again %s\n", 
-			pname, ssd_devname);
-		exit(1);
-	}
-	disk_fd = open(disk_devname, O_RDONLY);
-	if (disk_fd < 0) {
-		fprintf(stderr, "%s: Failed to open %s\n", 
-			pname, disk_devname);
-		exit(1);
-	}
-	if (ioctl(cache_fd, BLKGETSIZE, &cache_devsize) < 0) {
-		fprintf(stderr, "%s: Cannot get cache size %s\n", 
-			pname, ssd_devname);
-		exit(1);		
-	}
-	if (ioctl(disk_fd, BLKGETSIZE, &disk_devsize) < 0) {
-		fprintf(stderr, "%s: Cannot get disk size %s\n", 
-			pname, disk_devname);
-		exit(1);				
-	}
-	if (ioctl(cache_fd, BLKSSZGET, &cache_sectorsize) < 0) {
-		fprintf(stderr, "%s: Cannot get cache size %s\n", 
-			pname, ssd_devname);
-		exit(1);		
-	}
-	if (md_block_size > 0 &&
-	    md_block_size * 512 < cache_sectorsize) {
-		fprintf(stderr, "%s: SSD device (%s) sector size (%d) cannot be larger than metadata block size (%d) !\n",
-		        pname, ssd_devname, cache_sectorsize, md_block_size * 512);
-		exit(1);				
-	}
-	if (cache_size && cache_size > cache_devsize) {
-		fprintf(stderr, "%s: Cache size is larger than ssd size %lu/%lu\n", 
-			pname, cache_size, cache_devsize);
-		exit(1);		
-	}
+
+
+	strcpy(temp_char, ssd_devnames);
+	ssd_devname = strtok(temp_char, " ");
+	do {
+		cache_fd = open(ssd_devname, O_RDONLY);
+		if (cache_fd < 0) {
+			fprintf(stderr, "Failed to open %s\n", ssd_devname);
+			exit(1);
+		}
+		lseek(cache_fd, 0, SEEK_SET);
+		if (read(cache_fd, buf, 512) < 0) {
+			fprintf(stderr, "Cannot read Flashcache superblock %s\n", 
+				ssd_devname);
+			exit(1);		
+		}
+		if (sb->cache_sb_state == CACHE_MD_STATE_DIRTY ||
+		    sb->cache_sb_state == CACHE_MD_STATE_CLEAN ||
+		    sb->cache_sb_state == CACHE_MD_STATE_FASTCLEAN ||
+		    sb->cache_sb_state == CACHE_MD_STATE_UNSTABLE) {
+			fprintf(stderr, "%s: Valid Flashcache already exists on %s\n", 
+				pname, ssd_devname);
+			fprintf(stderr, "%s: Use flashcache_destroy first and then create again %s\n", 
+				pname, ssd_devname);
+			exit(1);
+		}
+		if (ioctl(cache_fd, BLKGETSIZE, &cache_devsize) < 0) {
+			fprintf(stderr, "%s: Cannot get cache size %s\n", 
+				pname, ssd_devname);
+			exit(1);		
+		}
+		total_cache_devsize += cache_devsize;
+		if (ioctl(cache_fd, BLKSSZGET, &cache_sectorsize) < 0) {
+			fprintf(stderr, "%s: Cannot get cache size %s\n", 
+				pname, ssd_devname);
+			exit(1);		
+		}
+
+		if (md_block_size > 0 &&
+		    md_block_size * 512 < cache_sectorsize) {
+			fprintf(stderr, "%s: SSD device (%s) sector size (%d) cannot be larger than metadata block size (%d) !\n",
+			        pname, ssd_devname, cache_sectorsize, md_block_size * 512);
+			exit(1);				
+		}
+		if (cache_size && cache_size > cache_devsize) {
+			fprintf(stderr, "%s: Cache size is larger than ssd size %lu/%lu\n", 
+				pname, cache_size, cache_devsize);
+			exit(1);		
+		}
+	} while(ssd_devname = strtok(NULL, " "));
+
+    strcpy(temp_char, disk_devnames);
+    disk_devname = strtok(temp_char, " ");
+    do {
+		disk_fd = open(disk_devname, O_RDONLY);
+		if (disk_fd < 0) {
+			fprintf(stderr, "%s: Failed to open %s\n", 
+				pname, disk_devname);
+			exit(1);
+		}
+		if (ioctl(disk_fd, BLKGETSIZE, &disk_devsize) < 0) {
+			fprintf(stderr, "%s: Cannot get disk size %s\n", 
+				pname, disk_devname);
+			exit(1);				
+		}
+		total_disk_devsize += disk_devsize;
+	} while(disk_devname = strtok(NULL, " "));
 
 	/* Remind users how much core memory it will take - not always insignificant.
  	 * If it's > 25% of RAM, warn.
          */
 	if (cache_size == 0)
-		ram_needed = (cache_devsize / block_size) * sizeof(struct cacheblock);	/* Whole device */
+		ram_needed = (total_cache_devsize / block_size) * sizeof(struct cacheblock);	/* Whole device */
 	else 
 		ram_needed = (cache_size    / block_size) * sizeof(struct cacheblock);
 
@@ -353,14 +428,14 @@ main(int argc, char **argv)
 			pname, disk_associativity);
 		exit(1);
 	}
-	if (!force && cache_size > disk_devsize) {
+	if (!force && cache_size > total_disk_devsize) {
 		fprintf(stderr, "Size of cache volume (%s) is larger than disk volume (%s)\n",
-			ssd_devname, disk_devname);
+			ssd_devnames, disk_devnames);
 		check_sure();
 	}
 	sprintf(dmsetup_cmd, "echo 0 %lu flashcache %s %s %s %d 2 %lu %lu %d %lu %d %lu"
 		" | dmsetup create %s",
-		disk_devsize, disk_devname, ssd_devname, cachedev, cache_mode, block_size, 
+		total_disk_devsize, disk_devnames, ssd_devnames, cachedev, cache_mode, block_size, 
 		cache_size, associativity, disk_associativity, write_cache_only, md_block_size,
 		cachedev);
 
@@ -370,7 +445,10 @@ main(int argc, char **argv)
 	load_module();
 	if (verbose)
 		fprintf(stderr, "Creating FlashCache Volume : \"%s\"\n", dmsetup_cmd);
+
+	/*TODO
 	ret = system(dmsetup_cmd);
+	*/
 	if (ret) {
 		fprintf(stderr, "%s failed\n", dmsetup_cmd);
 		exit(1);
