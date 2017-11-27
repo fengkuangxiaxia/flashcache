@@ -45,6 +45,15 @@
 
 #undef COMMIT_REV
 
+char *strrpl(char *s, const char *s1, const char *s2) {
+	char *ptr;
+	while (ptr = strstr(s, s1)) {
+		memmove(ptr + strlen(s2) , ptr + strlen(s1), strlen(ptr) - strlen(s1) + 1);
+		memcpy(ptr, &s2[0], strlen(s2));
+	}
+	return s;
+}
+
 void
 usage(char *pname)
 {
@@ -433,6 +442,10 @@ main(int argc, char **argv)
 			ssd_devnames, disk_devnames);
 		check_sure();
 	}
+
+	strrpl(disk_devnames, " ", "@");
+	strrpl(ssd_devnames, " ", "@");
+
 	sprintf(dmsetup_cmd, "echo 0 %lu flashcache %s %s %s %d 2 %lu %lu %d %lu %d %lu"
 		" | dmsetup create %s",
 		total_disk_devsize, disk_devnames, ssd_devnames, cachedev, cache_mode, block_size, 
@@ -446,9 +459,9 @@ main(int argc, char **argv)
 	if (verbose)
 		fprintf(stderr, "Creating FlashCache Volume : \"%s\"\n", dmsetup_cmd);
 
-	/*TODO
+	
 	ret = system(dmsetup_cmd);
-	*/
+	
 	if (ret) {
 		fprintf(stderr, "%s failed\n", dmsetup_cmd);
 		exit(1);

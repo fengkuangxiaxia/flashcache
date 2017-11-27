@@ -839,26 +839,41 @@ flashcache_clean_all_sets(struct work_struct *work)
 }
 
 static int inline
-flashcache_get_dev(struct dm_target *ti, char *pth, struct dm_dev **dmd,
-		   char *dmc_dname, sector_t tilen)
+flashcache_get_dev(struct dm_target *ti, char *pth, struct dm_dev *dmd[DEVICE_NUM],
+		   char dmc_dname[DEVICE_NUM][DEV_PATHLEN], unsigned int *dmc_dnum, sector_t tilen)
 {
 	int rc;
+	int r = 0;
+
+	char* const delim = "@";  
+	
+	char *token, *cur = pth;  
+	while (token = strsep(&cur, delim)) {  
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,34)
-	rc = dm_get_device(ti, pth,
-			   dm_table_get_mode(ti->table), dmd);
+		rc = dm_get_device(ti, token,
+			   dm_table_get_mode(ti->table), &(dmd[*dmc_dnum]));
 #else
 #if defined(RHEL_MAJOR) && RHEL_MAJOR == 6
-	rc = dm_get_device(ti, pth,
-			   dm_table_get_mode(ti->table), dmd);
+		rc = dm_get_device(ti, token,
+			   dm_table_get_mode(ti->table), &(dmd[*dmc_dnum]));
 #else 
-	rc = dm_get_device(ti, pth, 0, tilen,
-			   dm_table_get_mode(ti->table), dmd);
+		rc = dm_get_device(ti, token, 0, tilen,
+			   dm_table_get_mode(ti->table), &(dmd[*dmc_dnum]));
 #endif
 #endif
-	if (!rc)
-		strncpy(dmc_dname, pth, DEV_PATHLEN);
-	return rc;
+
+		if (!rc)
+			strncpy(dmc_dname[*dmc_dnum], token, DEV_PATHLEN);
+
+		(*dmc_dnum)++;
+
+		r |= rc;
+
+		;
+	}
+
+	return r;
 }
 
 /*
@@ -881,6 +896,7 @@ flashcache_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 	sector_t i, order;
 	int r = -EINVAL;
 	int persistence = 0;
+	int z;
 	
 	if (argc < 3) {
 		ti->error = "flashcache: Need at least 3 arguments";
@@ -894,23 +910,58 @@ flashcache_ctr(struct dm_target *ti, unsigned int argc, char **argv)
 		goto bad;
 	}
 
+	dmc->disk_dev_num = 0;
+	dmc->cache_dev_num = 0;
+
 	dmc->tgt = ti;
-	if ((r = flashcache_get_dev(ti, argv[0], &dmc->disk_dev, 
-				    dmc->disk_devname, ti->len))) {
+
+	if ((r = flashcache_get_dev(ti, argv[0], dmc->disk_devs, 
+				    dmc->disk_devnames, &dmc->disk_dev_num, ti->len))) {
 		if (r == -EBUSY)
 			ti->error = "flashcache: Disk device is busy, cannot create cache";
 		else
 			ti->error = "flashcache: Disk device lookup failed";
 		goto bad1;
 	}
-	if ((r = flashcache_get_dev(ti, argv[1], &dmc->cache_dev,
-				    dmc->cache_devname, 0))) {
+	if ((r = flashcache_get_dev(ti, argv[1], dmc->cache_devs,
+				    dmc->cache_devnames, &dmc->cache_dev_num, 0))) {
 		if (r == -EBUSY)
 			ti->error = "flashcache: Cache device is busy, cannot create cache";
 		else
 			ti->error = "flashcache: Cache device lookup failed";
 		goto bad2;
 	}
+	
+	strncpy(dmc->cache_devname, dmc->cache_devnames[0], DEV_PATHLEN);
+	dmc->cache_dev = dmc->cache_devs[0];
+	strncpy(dmc->disk_devname, dmc->disk_devnames[0], DEV_PATHLEN);
+	dmc->disk_dev = dmc->disk_devs[0];
+
+	/*
+	printk("%d %s\n", dmc->cache_dev_num, dmc->cache_devname);
+	printk("%d %s\n", dmc->disk_dev_num, dmc->disk_devname);
+	printk("\n");
+	int z;
+	for(z = 0; z < dmc->cache_dev_num; z++) {
+		printk("%s\n", dmc->cache_devnames[z]);
+	}
+	printk("\n");
+	for(z = 0; z < dmc->disk_dev_num; z++) {
+		printk("%s\n", dmc->disk_devnames[z]);
+	}
+	printk("\n");
+
+	for(z = 0; z < dmc->cache_dev_num; z++) {
+		dm_put_device(ti, dmc->cache_devs[z]);
+	}
+	for(z = 0; z < dmc->disk_dev_num; z++) {
+		dm_put_device(ti, dmc->disk_devs[z]);
+	}
+	dm_put_device(ti, dmc->cache_dev);
+	dm_put_device(ti, dmc->disk_dev);
+	kfree(dmc);
+	return 1;
+	*/
 
 	if (sscanf(argv[2], "%s", (char *)&dmc->dm_vdevname) != 1) {
 		ti->error = "flashcache: Virtual device name lookup failed";
@@ -1274,9 +1325,17 @@ init:
 	return 0;
 
 bad3:
-	dm_put_device(ti, dmc->cache_dev);
+	//dm_put_device(ti, dmc->cache_dev);
+	for(z = 0; z < dmc->cache_dev_num; z++) {
+		dm_put_device(ti, dmc->cache_devs[z]);
+	}
+	//dm_put_device(ti, dmc->cache_dev);
 bad2:
-	dm_put_device(ti, dmc->disk_dev);
+	//dm_put_device(ti, dmc->disk_dev);
+	for(z = 0; z < dmc->disk_dev_num; z++) {
+		dm_put_device(ti, dmc->disk_devs[z]);
+	}
+	//dm_put_device(ti, dmc->disk_dev);
 bad1:
 	kfree(dmc);
 bad:
@@ -1474,8 +1533,18 @@ flashcache_dtr(struct dm_target *ti)
 	flashcache_del_all_pids(dmc, FLASHCACHE_BLACKLIST, 1);
 	VERIFY(dmc->num_whitelist_pids == 0);
 	VERIFY(dmc->num_blacklist_pids == 0);
-	dm_put_device(ti, dmc->disk_dev);
-	dm_put_device(ti, dmc->cache_dev);
+	//dm_put_device(ti, dmc->disk_dev);
+	//dm_put_device(ti, dmc->cache_dev);
+	int z;
+	for(z = 0; z < dmc->cache_dev_num; z++) {
+		dm_put_device(ti, dmc->cache_devs[z]);
+	}
+	for(z = 0; z < dmc->disk_dev_num; z++) {
+		dm_put_device(ti, dmc->disk_devs[z]);
+	}
+	//dm_put_device(ti, dmc->cache_dev);
+	//dm_put_device(ti, dmc->disk_dev);
+
 	kfree(dmc);
 }
 
@@ -1779,8 +1848,17 @@ flashcache_notify_reboot(struct notifier_block *this,
 		if (dmc->cache_mode == FLASHCACHE_WRITE_BACK) {
 			flashcache_sync_for_remove(dmc);
 			flashcache_writeback_md_store(dmc);
-			dm_put_device(dmc->tgt, dmc->cache_dev);
-			dm_put_device(dmc->tgt, dmc->disk_dev);
+			//dm_put_device(dmc->tgt, dmc->cache_dev);
+			//dm_put_device(dmc->tgt, dmc->disk_dev);
+			int z;
+			for(z = 0; z < dmc->cache_dev_num; z++) {
+				dm_put_device(dmc->tgt, dmc->cache_devs[z]);
+			}
+			for(z = 0; z < dmc->disk_dev_num; z++) {
+				dm_put_device(dmc->tgt, dmc->disk_devs[z]);
+			}
+			//dm_put_device(dmc->tgt, dmc->cache_dev);
+			//dm_put_device(dmc->tgt, dmc->disk_dev);
 		}
 	}
 	clear_bit(FLASHCACHE_UPDATE_LIST, &flashcache_control->synch_flags);

@@ -165,6 +165,8 @@ MUST DISABLE IRQs.
 #define FLASHCACHE_MAX_DISK_ASSOC       2048    /* Max Disk Assoc of 1MB in sectors */
 #define FLASHCACHE_NULL	0xFFFF
 
+#define DEVICE_NUM 128
+
 struct cacheblock;
 
 struct cache_set {
@@ -276,6 +278,11 @@ struct cache_c {
 	struct dm_dev 		*disk_dev;   /* Source device */
 	struct dm_dev 		*cache_dev; /* Cache device */
 
+	struct dm_dev 		*disk_devs[DEVICE_NUM];
+	unsigned int 		disk_dev_num;	
+	struct dm_dev 		*cache_devs[DEVICE_NUM];
+	unsigned int 		cache_dev_num;
+
 	int 			on_ssd_version;
 	
 	struct cacheblock	*cache;	/* Hash table for cache blocks */
@@ -366,6 +373,9 @@ struct cache_c {
 	// real device names are now stored as UUIDs
 	char cache_devname[DEV_PATHLEN];
 	char disk_devname[DEV_PATHLEN];
+
+	char cache_devnames[DEVICE_NUM][DEV_PATHLEN];
+	char disk_devnames[DEVICE_NUM][DEV_PATHLEN];
 
 	/* 
 	 * If the SSD returns errors, in WRITETHRU and WRITEAROUND modes, 
