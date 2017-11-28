@@ -525,9 +525,18 @@ struct dbn_index_pair {
 
 int flashcache_map(struct dm_target *ti, struct bio *bio,
 		   union map_info *map_context);
+int flashcache_iterate_devices(struct dm_target *ti,
+		iterate_devices_callout_fn fn, void *data);
+int flashcache_map_rq(struct dm_target *ti, struct request *clone,
+		union map_info *map_context);
+int flashcache_mk_rq(struct dm_target *ti, struct request_queue *q,
+		struct bio *bio);
 int flashcache_ctr(struct dm_target *ti, unsigned int argc,
 		   char **argv);
 void flashcache_dtr(struct dm_target *ti);
+
+int flashcache_status(struct dm_target *ti, status_type_t type,
+		      char *result, unsigned int maxlen);
 
 struct kcached_job *flashcache_alloc_cache_job(void);
 void flashcache_free_cache_job(struct kcached_job *job);
@@ -590,7 +599,7 @@ int dm_io_async_bvec(unsigned int num_regions,
 #endif
 			    int rw, 
 			    struct bio_vec *bvec, io_notify_fn fn, 
-			    void *context);
+			    void *context, int submit);
 #endif
 
 void flashcache_detect_fallow(struct cache_c *dmc, int index);
